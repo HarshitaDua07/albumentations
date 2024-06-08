@@ -16,6 +16,8 @@ from albucore.utils import (
     maybe_process_in_chunks,
     preserve_channel_dim,
 )
+from scipy.sparse import lil_matrix
+from scipy.sparse.linalg import spsolve
 from typing_extensions import Literal
 
 from albumentations import random_utils
@@ -1432,3 +1434,79 @@ def center(width: NumericType, height: NumericType) -> Tuple[float, float]:
         Tuple[float, float]: The center coordinates of the rectangle.
     """
     return width / 2 - 0.5, height / 2 - 0.5
+
+
+def copy_and_paste_blend(
+    base_image: np.ndarray,
+    overlay_image: np.ndarray,
+    mask: np.ndarray,
+    offset: Tuple[int, int],
+) -> np.ndarray:
+    y_offset, x_offset = offset
+    blended_image = base_image.copy()
+    mask_indices = np.where(mask > 0)
+    blended_image[mask_indices[0] + y_offset, mask_indices[1] + x_offset] = overlay_image[
+        mask_indices[0],
+        mask_indices[1],
+    ]
+    return blended_image
+
+
+def poisson_blending(
+    base_image: np.ndarray,
+    overlay_image: np.ndarray,
+    mask: np.ndarray,
+    offset: Tuple[int, int],
+) -> np.ndarray:
+    y_offset, x_offset = offset
+
+    blended_image = base_image.copy()
+    mask_indices = np.where(mask > 0)
+    num_pixels = len(mask_indices[0])
+    h, w = base_image.shape[:2]
+    overlay_h, overlay_w = overlay_image.shape[:2]
+
+    for channel in range(base_image.shape[2]):
+        base_channel = base_image[..., channel]
+        overlay_channel = overlay_image[..., channel]
+        b = np.zeros(num_pixels)
+        a = lil_matrix((num_pixels, num_pixels))
+
+        idx_map = np.zeros_like(mask, dtype=np.int32)
+        idx_map[mask_indices] = np.arange(num_pixels)
+
+        for i in range(num_pixels):
+            y, x = mask_indices[0][i], mask_indices[1][i]
+            a[i, i] = 4
+
+            neighbors = [(y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)]
+            for ny, nx in neighbors:
+                if (
+                    0 <= ny < overlay_h and 0 <= nx < overlay_w
+                ):  # Check if neighbor is within bounds of the overlay image
+                    if mask[ny, nx] > 0:
+                        a[i, idx_map[ny, nx]] = -1
+                    else:
+                        by = ny + y_offset
+                        bx = nx + x_offset
+                        if 0 <= by < h and 0 <= bx < w:  # Check if neighbor is within bounds of the base image
+                            b[i] += base_channel[by, bx]
+
+            b[i] += (
+                4 * overlay_channel[y, x] - overlay_channel[y - 1, x]
+                if y > 0
+                else 0 - overlay_channel[y + 1, x]
+                if y < overlay_h - 1
+                else 0 - overlay_channel[y, x - 1]
+                if x > 0
+                else 0 - overlay_channel[y, x + 1]
+                if x < overlay_w - 1
+                else 0
+            )
+
+        x = spsolve(a.tocsc(), b)
+        blended_channel = base_channel.copy()
+        blended_channel[mask_indices[0] + y_offset, mask_indices[1] + x_offset] = x.clip(0, 255).astype(np.uint8)
+        blended_image[..., channel] = blended_channel
+
+    return blended_image
