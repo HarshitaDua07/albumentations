@@ -373,13 +373,7 @@ class Compose(BaseCompose, HubMixin):
                 msg = "keypoints_params must be specified for keypoint transformations"
                 raise ValueError(msg)
 
-        if self.is_check_shapes and shapes and shapes.count(shapes[0]) != len(shapes):
-            msg = (
-                "Height and Width of image, mask or masks should be equal. You can disable shapes check "
-                "by setting a parameter is_check_shapes=False of Compose class (do it only if you are sure "
-                "about your data consistency)."
-            )
-            raise ValueError(msg)
+        
 
     @staticmethod
     def _make_targets_contiguous(data: Any) -> Dict[str, Any]:
